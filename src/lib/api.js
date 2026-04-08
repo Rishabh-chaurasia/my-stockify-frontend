@@ -1,12 +1,17 @@
 // ═══════════════════════════════════════════════════════════════
-// Stockify API Client
+// Stockify API — https://api.mystockify.in
 //
-// BACKEND ORDER BEHAVIOR (verified from Postman):
-//   ALL orders return status="PENDING" on placement
-//   The backend executes them when market opens / price conditions met
-//   EXECUTED orders show in portfolio (GET /api/portfolio)
-//   402 = Insufficient balance
-//   401 = Session expired
+// MARKET HOURS: 9:15 AM – 3:30 PM IST, Mon-Fri (no weekends/holidays)
+// ORDER LOGIC (from OrderService.java):
+//   MARKET + market open  → EXECUTED immediately, portfolio updated
+//   MARKET + market closed → PENDING, funds reserved at current price
+//   LIMIT  + (market closed OR currentPrice > limitPrice) → PENDING
+//   LIMIT  + (market open AND currentPrice <= limitPrice) → EXECUTED at min(current,limit)
+//
+// Scheduler runs every 10s during market hours — auto-executes PENDING orders
+//
+// GET /api/orders/get-orders → {success, data: {orders:[], totalOrders, pendingOrders, executedOrders}}
+// POST /api/orders/buy → {success, data: {symbol, quantity, orderType, price, status}}
 // ═══════════════════════════════════════════════════════════════
 
 const API = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || '';
@@ -37,6 +42,33 @@ async function parseErr(res) {
     || `Error ${res.status}`;
 }
 
+// ── Market time helpers (IST) ──────────────────────────────────
+export function isMarketOpen() {
+  const now = new Date();
+  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const day = ist.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  const h = ist.getHours(), m = ist.getMinutes();
+  const mins = h * 60 + m;
+  return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+}
+
+export function getMarketStatus() {
+  const now = new Date();
+  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const day = ist.getDay();
+  if (day === 0 || day === 6) return { open: false, label: 'Closed (Weekend)', color: '#94a3b8' };
+  const h = ist.getHours(), m = ist.getMinutes();
+  const mins = h * 60 + m;
+  const open = 9 * 60 + 15, close = 15 * 60 + 30;
+  if (mins < open)  return { open: false, label: `Opens at 9:15 AM IST`, color: '#f59e0b' };
+  if (mins > close) return { open: false, label: `Closed (Opens tomorrow 9:15 AM)`, color: '#94a3b8' };
+  // Pre-close 3:20-3:30
+  if (mins >= 15 * 60 + 20) return { open: true, label: 'Pre-close session', color: '#f59e0b' };
+  return { open: true, label: 'Market Open', color: '#00b386' };
+}
+
+// ── Profile mapper ────────────────────────────────────────────
 function mapProfile(raw) {
   if (!raw) return null;
   return {
@@ -123,42 +155,33 @@ export async function verifyEmail(username, otp) {
 export async function getPortfolio(username) {
   const res = await http(`/api/portfolio/${username}`);
   if (!res.ok) throw new ApiError(res.status, await parseErr(res));
-  const response = await res.json();
-  let raw = [];
-  if (Array.isArray(response.data)) {
-    raw = response.data;
-  } else if (Array.isArray(response.data?.stocks)) {
-    raw = response.data.stocks;
-  }
+  const { data } = await res.json();
+  const raw = Array.isArray(data) ? data : Array.isArray(data?.stocks) ? data.stocks : [];
   const holdings = raw.map(h => ({
     id:         h.id,
-    symbol:     h.stockName || '',
-    name:       (h.stockName || '').replace('.NS', ''),
+    symbol:     h.stockName  || '',
+    name:       (h.stockName || '').replace('.NS',''),
     qty:        h.quantity   || 0,
     avgPrice:   h.averagePrice || 0,
-    investment: h.investment || ((h.averagePrice || 0) * (h.quantity || 0)),
+    investment: h.investment || ((h.averagePrice||0)*(h.quantity||0)),
   }));
-  return {
-    holdings,
-    totalInvested: response.data?.totalInvestment ?? holdings.reduce((s,h) => s+h.investment, 0),
-  };
+  return { holdings, totalInvested: holdings.reduce((s,h)=>s+h.investment,0) };
 }
 
-// Fetch live prices for holdings
 export async function fetchHoldingPrices(symbols) {
   const result = {};
   await Promise.allSettled(symbols.map(async sym => {
     try {
       const d = await getStockData(sym, '1d', '1m');
-      if (d?.meta?.price) {
-        result[sym] = { price: d.meta.price, changePercent: d.meta.changePercent ?? 0 };
-      }
+      if (d?.meta?.price) result[sym] = { price: d.meta.price, changePercent: d.meta.changePercent ?? 0 };
     } catch {}
   }));
   return result;
 }
 
 // ── STOCKS ────────────────────────────────────────────────────
+// Returns { meta: StockMetaDTO, chart: StockCandleDTO[] }
+// StockCandleDTO.time = Unix timestamp (Long) — convert with new Date(time * 1000)
 export async function getStockData(symbol, range = '1d', interval = '1m') {
   const sym = symbol.includes('.') ? symbol : symbol.toUpperCase() + '.NS';
   const t = tok();
@@ -166,58 +189,121 @@ export async function getStockData(symbol, range = '1d', interval = '1m') {
   if (t) headers['Authorization'] = `Bearer ${t}`;
   const res = await fetch(`${API}/api/stocks/${encodeURIComponent(sym)}?range=${range}&interval=${interval}`, { headers });
   if (!res.ok) throw new ApiError(res.status, 'Stock not found');
-  return (await res.json()).data;
+  return (await res.json()).data; // { meta, chart }
+}
+
+// fetchChartData — smart routing:
+//   1d → backend (live intraday data)
+//   5d+ → Yahoo Finance directly (backend 500s on longer ranges due to rate limiting)
+// Falls back through 3 CORS proxies if needed
+const YF_PROXIES = [
+  (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+];
+
+function formatChartDate(ts, range) {
+  const d = new Date(ts * 1000);
+  if (range === '1d' || range === '5d') {
+    return d.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata' });
+  } else if (range === '1mo' || range === '3mo') {
+    return d.toLocaleDateString('en-IN', { day:'2-digit', month:'short' });
+  }
+  return d.toLocaleDateString('en-IN', { month:'short', year:'2-digit' });
 }
 
 export async function fetchChartData(symbol, range = '1y') {
-  try {
-    const sym = symbol.includes('.') ? symbol : symbol.toUpperCase() + '.NS';
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=${range}`;
-    const res = await fetch('https://corsproxy.io/?' + encodeURIComponent(url));
-    const j = await res.json();
-    const r = j?.chart?.result?.[0];
-    const ts = r?.timestamp ?? [], close = r?.indicators?.quote?.[0]?.close ?? [];
-    return ts.map((t, i) => ({
-      date: new Date(t * 1000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-      close: +((close[i] || 0).toFixed(2)),
-    })).filter(d => d.close > 0);
-  } catch { return []; }
+  const sym = symbol.includes('.') ? symbol : symbol.toUpperCase() + '.NS';
+  const intervalMap = { '1d':'1m', '5d':'5m', '1mo':'1d', '3mo':'1d', '6mo':'1d', '1y':'1d', '5y':'1wk' };
+  const interval = intervalMap[range] || '1d';
+
+  // Try backend first for 1d (fresh intraday), fallback to Yahoo if 500
+  if (range === '1d') {
+    try {
+      const d = await getStockData(sym, '1d', '1m');
+      if (d?.chart?.length > 0) {
+        return d.chart
+          .filter(c => c.close != null && c.close > 0)
+          .map(c => ({ date: formatChartDate(c.time, '1d'), close: Number(c.close.toFixed(2)), time: c.time }));
+      }
+    } catch {
+      // Backend 500d (Yahoo rate limit) — fall through to direct Yahoo fetch below
+    }
+  }
+
+  // All ranges (or 1d fallback) — fetch directly from Yahoo Finance with proxy fallbacks
+  const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}`;
+  
+  for (const makeProxy of YF_PROXIES) {
+    try {
+      const res = await fetch(makeProxy(yfUrl), { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const result = json?.chart?.result?.[0];
+      if (!result) continue;
+      const timestamps = result.timestamp ?? [];
+      const closes = result.indicators?.quote?.[0]?.close ?? [];
+      if (timestamps.length === 0) continue;
+      return timestamps
+        .map((t, i) => ({ date: formatChartDate(t, range), close: Number((closes[i] || 0).toFixed(2)), time: t }))
+        .filter(c => c.close > 0);
+    } catch {}
+  }
+  return [];
 }
 
 // ── ORDERS ────────────────────────────────────────────────────
-// From Postman: ALL orders come back as status="PENDING"
-// Backend executes them when market is open and price conditions met
-// EXECUTED orders appear in portfolio via GET /api/portfolio
-// Cancelled orders: handled locally only (no backend cancel endpoint)
+// GET /api/orders/get-orders?username=X&orderType=ALL|PENDING|EXECUTED
+// Returns: {success, data: {orders:[{symbol,quantity,orderType,price,status}], totalOrders, pendingOrders, executedOrders}}
+export async function getOrders(username, orderType = 'ALL') {
+  const res = await http(`/api/orders/get-orders?username=${encodeURIComponent(username)}&orderType=${orderType}`);
+  if (!res.ok) throw new ApiError(res.status, await parseErr(res));
+  const j = await res.json();
+  const data = j?.data || {};
+  const raw  = Array.isArray(data.orders) ? data.orders : [];
+  return {
+    orders: raw.map((o, i) => ({
+      id:                 o.id || i,
+      symbol:             o.symbol || '',
+      stockName:          (o.symbol||'').replace('.NS',''),
+      quantity:           o.quantity || 0,
+      orderType:          o.orderType || 'MARKET',
+      price:              o.price || 0,
+      limitPrice:         o.orderType === 'LIMIT' ? (o.price||0) : null,
+      executedPrice:      o.status === 'EXECUTED' ? (o.price||0) : null,
+      marketPriceAtOrder: o.price || 0,
+      status:             o.status || 'PENDING',
+      createdAt:          o.createdAt || new Date().toISOString(),
+    })),
+    totalOrders:    data.totalOrders    || 0,
+    pendingOrders:  data.pendingOrders  || 0,
+    executedOrders: data.executedOrders || 0,
+  };
+}
+
+// POST /api/orders/buy
+// Response: {success, data: {symbol, quantity, orderType, price, status}}
+// status reflects market hours: EXECUTED if market open, PENDING otherwise
 export async function buyStock(username, { symbol, quantity, orderType, price }) {
   const res = await http(`/api/orders/buy?username=${encodeURIComponent(username)}`, {
     method: 'POST',
     body: JSON.stringify({ symbol, quantity, orderType: orderType || 'MARKET', price }),
   });
   const j = await res.json();
-
-  if (res.status === 402) {
-    throw new ApiError(402, j?.error?.message || 'Insufficient balance in your wallet');
-  }
-  if (!res.ok || !j.success) {
-    throw new ApiError(res.status, j?.error?.message || j?.message || 'Order failed');
-  }
-  // Backend response: {symbol, quantity, orderType, price, status}
-  // status is always "PENDING" — backend executes when market opens
-  return j.data;
+  if (res.status === 402) throw new ApiError(402, j?.error?.message || 'Insufficient balance');
+  if (!res.ok || !j.success) throw new ApiError(res.status, j?.error?.message || j?.message || 'Order failed');
+  return j.data; // {symbol, quantity, orderType, price, status}
 }
 
-// ── LOCAL ORDER STORE ─────────────────────────────────────────
-// Orders are stored locally since there's no GET /api/orders endpoint
-// When backend executes an order, it appears in portfolio
-// Cancelled: marked locally, no wallet refund from backend (no cancel API)
+// ── LOCAL ORDER STORE — fallback/cache ────────────────────────
+// Key: sfy_orders_{username}
 const OKEY = u => `sfy_orders_${u}`;
 
 export function saveLocalOrder(username, order) {
   try {
     const list = getLocalOrders(username);
-    const entry = { ...order, id: Date.now(), createdAt: new Date().toISOString() };
-    localStorage.setItem(OKEY(username), JSON.stringify([entry, ...list]));
+    const entry = { ...order, id: order.id || Date.now(), createdAt: order.createdAt || new Date().toISOString() };
+    localStorage.setItem(OKEY(username), JSON.stringify([entry, ...list.slice(0,99)]));
     return entry;
   } catch { return null; }
 }
@@ -228,7 +314,6 @@ export function getLocalOrders(username) {
 }
 
 export function cancelLocalOrder(username, id) {
-  // Mark as cancelled locally — no wallet refund since backend hasn't executed it
   try {
     const list = getLocalOrders(username).map(o =>
       o.id === id ? { ...o, status: 'CANCELLED', cancelledAt: new Date().toISOString() } : o
@@ -249,7 +334,7 @@ export function isAuthenticated() {
     if (!t || t === 'undefined' || t === 'null') return false;
     const parts = t.split('.');
     if (parts.length !== 3) return false;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
     if (!payload.exp) return true;
     if (Date.now() >= payload.exp * 1000) {
       localStorage.removeItem('authToken'); localStorage.removeItem('username');
@@ -258,35 +343,7 @@ export function isAuthenticated() {
     return true;
   } catch { return false; }
 }
-// ── ORDER CALCULATION ─────────────────────────────────────────
-export function calcOrderOutcome(orderType, marketPrice, limitPrice) {
-  if (orderType === 'MARKET') {
-    return {
-      isPending: false,
-      executedAt: marketPrice
-    };
-  }
 
-  if (orderType === 'LIMIT') {
-    if (!limitPrice) return null;
-
-    // If limit price < market → pending
-    if (limitPrice < marketPrice) {
-      return {
-        isPending: true,
-        executedAt: null
-      };
-    }
-
-    // If limit price >= market → executes instantly
-    return {
-      isPending: false,
-      executedAt: Math.min(limitPrice, marketPrice)
-    };
-  }
-
-  return null;
-}
 export function getStoredUsername() {
   try { return localStorage.getItem('username'); } catch { return null; }
 }

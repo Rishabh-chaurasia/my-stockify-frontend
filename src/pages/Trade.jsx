@@ -3,7 +3,18 @@ import { useNavigate } from 'react-router-dom';
 import { Search, X, RefreshCw, TrendingUp, TrendingDown, ChevronRight, Zap, Clock, AlertCircle, CheckCircle, AlertTriangle, ShoppingCart } from 'lucide-react';
 import Header from '../components/Header';
 import { useAuth } from '../context/AuthContext';
-import { buyStock, getUserProfile, getPortfolio, getStockData, saveLocalOrder, calcOrderOutcome } from '../lib/api';
+import { buyStock, getUserProfile, getPortfolio, getStockData, saveLocalOrder, getMarketStatus } from '../lib/api';
+
+// Local calcOrderOutcome — predicts UI feedback before API call
+// Actual status always comes from backend response
+function calcOrderOutcome(orderType, livePrice, limitPrice) {
+  if (orderType === 'MARKET') return { isPending: false, executedAt: livePrice };
+  if (orderType === 'LIMIT') {
+    if (livePrice > limitPrice) return { isPending: true, executedAt: null };
+    return { isPending: false, executedAt: Math.min(livePrice, limitPrice) };
+  }
+  return { isPending: false, executedAt: livePrice };
+}
 
 const FMT = v => v==null?'—':new Intl.NumberFormat('en-IN',{maximumFractionDigits:2}).format(v);
 const INR = v => new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(v??0);
@@ -17,7 +28,7 @@ const STOCKS = [
   { s:'SBIN.NS',      n:'SBI',                      sec:'Banking',  fb:782   },
   { s:'BAJFINANCE.NS',n:'Bajaj Finance',             sec:'Finance',  fb:8910  },
   { s:'WIPRO.NS',     n:'Wipro',                     sec:'IT',       fb:255   },
-  { s:'TMPV.NS',n:'Tata Motors Passenger Vehicle',               sec:'Auto',     fb:665   },
+  { s:'TATAMOTORS.NS',n:'Tata Motors',               sec:'Auto',     fb:665   },
   { s:'BHARTIARTL.NS',n:'Bharti Airtel',             sec:'Telecom',  fb:1640  },
   { s:'IRFC.NS',      n:'IRFC',                      sec:'Finance',  fb:148   },
   { s:'RVNL.NS',      n:'RVNL',                      sec:'Infra',    fb:295   },
@@ -133,10 +144,24 @@ export default function Trade() {
     const snapLim  = parseFloat(lim)||0;
     const snapQty  = parseInt(qty)||0;
     try {
+      // Backend determines status based on market hours + price:
+      // MARKET + market open → EXECUTED | MARKET + closed → PENDING
+      // LIMIT + live > limit → PENDING  | LIMIT + live <= limit → EXECUTED
       const result = await buyStock(username, { symbol:sel.s, quantity:snapQty, orderType:otype, price:otype==='LIMIT'?snapLim:snapLive });
-      // Use backend's status as source of truth
-      const status = result?.status || (calcOrderOutcome(otype,snapLive,snapLim).isPending?'PENDING':'EXECUTED');
-      const record = { symbol:sel.s, stockName:sel.n, quantity:snapQty, orderType:otype, limitPrice:otype==='LIMIT'?snapLim:null, marketPriceAtOrder:snapLive, executedPrice:status==='PENDING'?null:(result?.price||snapLive), status };
+      const backendStatus = result?.status || 'PENDING'; // always trust backend
+      const record = {
+        id:                 Date.now(),
+        symbol:             result?.symbol || sel.s,
+        stockName:          sel.n,
+        quantity:           result?.quantity || snapQty,
+        orderType:          result?.orderType || otype,
+        limitPrice:         otype==='LIMIT' ? snapLim : null,
+        marketPriceAtOrder: snapLive,
+        executedPrice:      backendStatus==='EXECUTED' ? (result?.price||snapLive) : null,
+        price:              result?.price || snapLive,
+        status:             backendStatus,
+        createdAt:          new Date().toISOString(),
+      };
       saveLocalOrder(username, record);
       setConf(record);
       loadUser();
@@ -162,9 +187,14 @@ export default function Trade() {
         <div className="fade-up" style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:12 }}>
           <div>
             <h1 style={{ fontSize:22,fontWeight:700,color:'var(--text)',letterSpacing:'-0.4px',marginBottom:3 }}>Stocks</h1>
-            <div style={{ display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--text2)' }}>
-              <span className="dot-live"/>
-              <span>NSE · Live prices</span>
+            <div style={{ display:'flex',alignItems:'center',gap:10,flexWrap:'wrap' }}>
+              {(() => { const ms = getMarketStatus(); return (
+                <span style={{ display:'flex',alignItems:'center',gap:5,fontSize:12,fontWeight:600,color:ms.color }}>
+                  <span style={{ width:7,height:7,borderRadius:'50%',background:ms.color,display:'inline-block',animation:ms.open?'pulse 2s ease infinite':'none' }}/>
+                  {ms.label}
+                </span>
+              );})()}
+              <span style={{ fontSize:12,color:'var(--muted)' }}>NSE · Live prices</span>
             </div>
           </div>
           {wallet && (
