@@ -141,6 +141,18 @@ export default function Explore() {
               <Link to="/register" style={{ color:'var(--green)',fontWeight:600 }}>Create free account</Link> to start trading →
             </p>
           )}
+
+          {/* Analysis CTA */}
+          <div className="fade-up stagger-4" style={{ marginTop:20 }}>
+            <Link to="/analysis"
+              style={{ display:'inline-flex', alignItems:'center', gap:8, padding:'11px 24px', background:'#fff', border:'1.5px solid var(--border2)', borderRadius:28, fontSize:14, fontWeight:600, color:'var(--text)', boxShadow:'0 2px 12px rgba(0,0,0,0.07)', transition:'all 0.15s', textDecoration:'none' }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor='var(--blue)'; e.currentTarget.style.color='var(--blue)'; e.currentTarget.style.boxShadow='0 4px 16px rgba(83,103,255,0.15)'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border2)'; e.currentTarget.style.color='var(--text)'; e.currentTarget.style.boxShadow='0 2px 12px rgba(0,0,0,0.07)'; }}>
+              <BarChart2 size={16} color="var(--blue)"/>
+              Fundamental Analysis
+              <span style={{ fontSize:11, padding:'2px 8px', background:'var(--blue-lt)', color:'var(--blue)', borderRadius:10, fontWeight:700 }}>NEW</span>
+            </Link>
+          </div>
         </div>
       </div>
 

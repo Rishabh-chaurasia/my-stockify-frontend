@@ -10,6 +10,7 @@ import Trade       from './pages/Trade';
 import Orders      from './pages/Orders';
 import Explore     from './pages/Explore';
 import StockSearch from './pages/StockSearch';
+import Analysis    from './pages/Analysis';
 
 function Protected({ children }) {
   const { isLoggedIn, isLoading } = useAuth();
@@ -36,7 +37,8 @@ export default function App() {
           {/* Public routes - accessible without login */}
           <Route path="/"        element={<Explore/>}/>
           <Route path="/explore" element={<Explore/>}/>
-          <Route path="/stocks"  element={<StockSearch/>}/>
+          <Route path="/stocks"   element={<StockSearch/>}/>
+          <Route path="/analysis" element={<Analysis/>}/>
           <Route path="/login"   element={<Public><Login/></Public>}/>
           <Route path="/register" element={<Public><Register/></Public>}/>
 
