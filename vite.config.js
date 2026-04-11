@@ -6,12 +6,22 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      // Only used in local dev (npm run dev) when VITE_API_URL is not set
-      // In production build, VITE_API_URL=https://api.mystockify.in takes over
+      // Proxy Spring Boot backend
       '/api': {
         target: 'http://localhost:8081',
         changeOrigin: true,
         secure: false,
+      },
+      // Proxy Yahoo Finance — solves CORS in local dev
+      // In production, /api/chart Vercel serverless function handles this
+      '/yf': {
+        target: 'https://query1.finance.yahoo.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: path => path.replace(/^\/yf/, ''),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
       },
     },
   },

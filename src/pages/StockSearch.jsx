@@ -48,10 +48,11 @@ export default function StockSearch() {
   // Restore from sessionStorage on mount
   const [query,     setQuery]     = useState(() => sessionStorage.getItem(SS_QUERY) || '');
   const [stock,     setStock]     = useState(() => { try { return JSON.parse(sessionStorage.getItem(SS_STOCK)||'null'); } catch { return null; } });
-  const [range,     setRange]     = useState(() => sessionStorage.getItem(SS_RANGE) || '1y');
+  const [range,     setRange]     = useState(() => sessionStorage.getItem(SS_RANGE) || '1d');
   const [chart,     setChart]     = useState([]);
   const [loading,   setLoading]   = useState(false);
   const [chartLoad, setChartLoad] = useState(false);
+  const [chartErr,  setChartErr]  = useState(false);
   const [error,     setError]     = useState('');
   const [wallet,    setWallet]    = useState(null);
   const [otype,     setOtype]     = useState('MARKET');
@@ -99,18 +100,21 @@ export default function StockSearch() {
 
   const loadChart = async (symbol, r) => {
     setChartLoad(true);
+    setChartErr(false);
     try {
       const data = await fetchChartData(symbol, r);
-      setChart(data||[]);
+      setChart(data || []);
+      if (!data || data.length === 0) setChartErr(true);
     } catch(e) {
-      console.warn('Chart failed:', e.message);
       setChart([]);
+      setChartErr(true);
     }
     setChartLoad(false);
   };
 
   const changeRange = r => {
     setRange(r);
+    setChartErr(false);
     sessionStorage.setItem(SS_RANGE, r);
     if (stock) loadChart(stock.symbol, r);
   };
@@ -207,7 +211,7 @@ export default function StockSearch() {
                 <h2 style={{ fontSize:16, fontWeight:700, color:'var(--text)', marginBottom:8 }}>{stock.name || stock.symbol.replace('.NS','')}</h2>
                 <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginBottom:16 }}>
                   <span style={{ fontSize:32, fontWeight:800, fontFamily:'var(--mono)', color:'var(--text)', letterSpacing:'-1px' }}>₹{FMT(stock.price)}</span>
-                  <span className={isUp?'tag-green':'tag-red'} style={{ fontSize:13, padding:'4px 10px' }}>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'4px 10px', borderRadius:6, fontSize:13, fontWeight:600, background:isUp?'var(--green-lt)':'var(--red-lt)', color:isUp?'var(--green-d)':'var(--red)' }}>
                     {isUp?<TrendingUp size={12}/>:<TrendingDown size={12}/>}
                     {isUp?'+':''}{FMT(stock.change)} ({isUp?'+':''}{(stock.changePercent??0).toFixed(2)}%)
                   </span>
@@ -237,8 +241,24 @@ export default function StockSearch() {
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--muted)', fontSize:13 }}>
-                    {chartLoad ? 'Loading chart…' : 'Chart data unavailable for this range'}
+                  <div style={{ height:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10 }}>
+                    <p style={{ fontSize:13, color:'var(--muted)', textAlign:'center' }}>
+                      {chartErr ? 'Chart unavailable — backend rate limited by Yahoo Finance' : 'No chart data for this range'}
+                    </p>
+                    {chartErr && (
+                      <div style={{ display:'flex', gap:8 }}>
+                        <button onClick={() => loadChart(stock.symbol, range)}
+                          style={{ fontSize:12, fontWeight:600, color:'var(--green-d)', background:'var(--green-lt)', border:'none', padding:'5px 14px', borderRadius:'var(--r-sm)', cursor:'pointer' }}>
+                          ↺ Retry
+                        </button>
+                        {range !== '1d' && (
+                          <button onClick={() => { setRange('1d'); sessionStorage.setItem(SS_RANGE,'1d'); loadChart(stock.symbol, '1d'); }}
+                            style={{ fontSize:12, fontWeight:600, color:'var(--blue)', background:'var(--blue-lt)', border:'none', padding:'5px 14px', borderRadius:'var(--r-sm)', cursor:'pointer' }}>
+                            Load 1D instead
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

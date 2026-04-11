@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { TrendingUp, Search, LayoutDashboard, ArrowLeftRight, ClipboardList, User, LogOut, Compass, Menu, X } from 'lucide-react';
+import { Search, LayoutDashboard, ArrowLeftRight, ClipboardList, User, LogOut, Compass, Menu, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const NAV_PUBLIC = [
@@ -40,10 +40,20 @@ export default function Header() {
       <header style={{ position:'sticky',top:0,zIndex:200,background:'#fff',borderBottom:'1px solid var(--border)' }}>
         <div style={{ maxWidth:1280,margin:'0 auto',height:60,padding:'0 24px',display:'flex',alignItems:'center',gap:0 }}>
 
-          {/* Logo */}
-          <Link to="/" style={{ display:'flex',alignItems:'center',gap:8,marginRight:40,flexShrink:0 }}>
-            <div style={{ width:32,height:32,borderRadius:8,background:'linear-gradient(135deg,#00d09c,#5367ff)',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 2px 8px rgba(0,208,156,0.3)' }}>
-              <TrendingUp size={16} color="#fff" strokeWidth={2.5}/>
+          {/* Logo — uses actual Stockify brand logo */}
+          <Link to="/" style={{ display:'flex',alignItems:'center',gap:10,marginRight:40,flexShrink:0 }}>
+            <img
+              src="/logo.png"
+              alt="Stockify"
+              style={{ width:38,height:38,objectFit:'contain',borderRadius:8 }}
+              onError={e => {
+                // Fallback to gradient icon if logo fails to load
+                e.target.style.display = 'none';
+                e.target.nextSibling.style.display = 'flex';
+              }}
+            />
+            <div style={{ width:38,height:38,borderRadius:8,background:'linear-gradient(135deg,#00d09c,#5367ff)',display:'none',alignItems:'center',justifyContent:'center',boxShadow:'0 2px 8px rgba(0,208,156,0.3)',flexShrink:0 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
             </div>
             <div>
               <span style={{ fontWeight:800,fontSize:16,letterSpacing:'-0.4px',color:'#1d1d1d' }}>Stockify</span>
@@ -51,12 +61,13 @@ export default function Header() {
             </div>
           </Link>
 
-          {/* Desktop nav — Groww underline style */}
+          {/* Desktop nav */}
           <nav className="hd-nav" style={{ display:'flex',height:60,alignItems:'stretch' }}>
             {NAV.map(({ to, label }) => {
               const active = on(to);
               return (
-                <Link key={to} to={to} style={{ display:'flex',alignItems:'center',padding:'0 16px',fontSize:14,fontWeight:active?600:400,color:active?'var(--green)':'var(--text2)',position:'relative',transition:'color 0.15s',borderBottom:active?'2px solid var(--green)':'2px solid transparent',whiteSpace:'nowrap' }}
+                <Link key={to} to={to}
+                  style={{ display:'flex',alignItems:'center',padding:'0 16px',fontSize:14,fontWeight:active?600:400,color:active?'var(--green)':'var(--text2)',position:'relative',transition:'color 0.15s',borderBottom:active?'2px solid var(--green)':'2px solid transparent',whiteSpace:'nowrap' }}
                   onMouseEnter={e=>{ if(!active){ e.currentTarget.style.color='var(--text)'; } }}
                   onMouseLeave={e=>{ if(!active){ e.currentTarget.style.color='var(--text2)'; } }}>
                   {label}
@@ -108,7 +119,8 @@ export default function Header() {
               </div>
             )}
             {NAV.map(({ to, label }) => (
-              <Link key={to} to={to} onClick={()=>setOpen(false)} style={{ display:'block',padding:'12px 14px',borderRadius:'var(--r)',fontSize:14,fontWeight:on(to)?600:400,color:on(to)?'var(--green)':'var(--text)',background:on(to)?'var(--green-lt)':'transparent',marginBottom:2,transition:'all 0.12s' }}>
+              <Link key={to} to={to} onClick={()=>setOpen(false)}
+                style={{ display:'block',padding:'12px 14px',borderRadius:'var(--r)',fontSize:14,fontWeight:on(to)?600:400,color:on(to)?'var(--green)':'var(--text)',background:on(to)?'var(--green-lt)':'transparent',marginBottom:2,transition:'all 0.12s' }}>
                 {label}
               </Link>
             ))}
@@ -120,7 +132,7 @@ export default function Header() {
         )}
       </header>
 
-      {/* Mobile bottom nav — Groww style */}
+      {/* Mobile bottom nav */}
       <nav className="hd-bot" style={{ position:'fixed',bottom:0,left:0,right:0,zIndex:200,background:'#fff',borderTop:'1px solid var(--border)',padding:'4px 0 max(env(safe-area-inset-bottom),6px)',display:'none' }}>
         {BOT.map(({ to, label, Icon }) => {
           const active = on(to);

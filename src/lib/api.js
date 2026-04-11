@@ -1,17 +1,14 @@
 // ═══════════════════════════════════════════════════════════════
 // Stockify API — https://api.mystockify.in
 //
-// MARKET HOURS: 9:15 AM – 3:30 PM IST, Mon-Fri (no weekends/holidays)
+// MARKET HOURS: 9:15 AM – 3:30 PM IST, Mon-Fri
 // ORDER LOGIC (from OrderService.java):
-//   MARKET + market open  → EXECUTED immediately, portfolio updated
-//   MARKET + market closed → PENDING, funds reserved at current price
-//   LIMIT  + (market closed OR currentPrice > limitPrice) → PENDING
-//   LIMIT  + (market open AND currentPrice <= limitPrice) → EXECUTED at min(current,limit)
+//   MARKET + market open  → EXECUTED immediately
+//   MARKET + market closed → PENDING, funds reserved
+//   LIMIT  + (closed OR currentPrice > limitPrice) → PENDING
+//   LIMIT  + (open AND currentPrice <= limitPrice) → EXECUTED
 //
 // Scheduler runs every 10s during market hours — auto-executes PENDING orders
-//
-// GET /api/orders/get-orders → {success, data: {orders:[], totalOrders, pendingOrders, executedOrders}}
-// POST /api/orders/buy → {success, data: {symbol, quantity, orderType, price, status}}
 // ═══════════════════════════════════════════════════════════════
 
 const API = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || '';
@@ -46,7 +43,7 @@ async function parseErr(res) {
 export function isMarketOpen() {
   const now = new Date();
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const day = ist.getDay(); // 0=Sun, 6=Sat
+  const day = ist.getDay();
   if (day === 0 || day === 6) return false;
   const h = ist.getHours(), m = ist.getMinutes();
   const mins = h * 60 + m;
@@ -63,7 +60,6 @@ export function getMarketStatus() {
   const open = 9 * 60 + 15, close = 15 * 60 + 30;
   if (mins < open)  return { open: false, label: `Opens at 9:15 AM IST`, color: '#f59e0b' };
   if (mins > close) return { open: false, label: `Closed (Opens tomorrow 9:15 AM)`, color: '#94a3b8' };
-  // Pre-close 3:20-3:30
   if (mins >= 15 * 60 + 20) return { open: true, label: 'Pre-close session', color: '#f59e0b' };
   return { open: true, label: 'Market Open', color: '#00b386' };
 }
@@ -180,81 +176,86 @@ export async function fetchHoldingPrices(symbols) {
 }
 
 // ── STOCKS ────────────────────────────────────────────────────
+// Always routes through backend — backend talks to Yahoo Finance server-side
+// (no CORS issues). Backend may 500 on longer ranges due to Yahoo rate limiting.
 // Returns { meta: StockMetaDTO, chart: StockCandleDTO[] }
-// StockCandleDTO.time = Unix timestamp (Long) — convert with new Date(time * 1000)
+// StockCandleDTO.time = Unix timestamp in seconds — multiply by 1000 for JS Date
 export async function getStockData(symbol, range = '1d', interval = '1m') {
   const sym = symbol.includes('.') ? symbol : symbol.toUpperCase() + '.NS';
   const t = tok();
   const headers = { 'Content-Type': 'application/json' };
   if (t) headers['Authorization'] = `Bearer ${t}`;
   const res = await fetch(`${API}/api/stocks/${encodeURIComponent(sym)}?range=${range}&interval=${interval}`, { headers });
-  if (!res.ok) throw new ApiError(res.status, 'Stock not found');
+  if (!res.ok) throw new ApiError(res.status, 'Stock data unavailable');
   return (await res.json()).data; // { meta, chart }
 }
 
-// fetchChartData — smart routing:
-//   1d → backend (live intraday data)
-//   5d+ → Yahoo Finance directly (backend 500s on longer ranges due to rate limiting)
-// Falls back through 3 CORS proxies if needed
-const YF_PROXIES = [
-  (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
-];
+// ── CHART DATA — Yahoo Finance directly ───────────────────────
+// Local dev: Vite proxies /yf/* → query1.finance.yahoo.com (no CORS)
+// Production: /api/chart Vercel serverless function fetches Yahoo server-side
+//
+// This bypasses the Spring Boot backend entirely for chart data,
+// since backend rate-limits on ranges > 1d.
+
+const intervalMap = { '1d':'1m', '5d':'5m', '1mo':'1d', '3mo':'1d', '6mo':'1d', '1y':'1d', '5y':'1wk' };
 
 function formatChartDate(ts, range) {
   const d = new Date(ts * 1000);
   if (range === '1d' || range === '5d') {
     return d.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata' });
-  } else if (range === '1mo' || range === '3mo') {
+  } else if (range === '1mo' || range === '3mo' || range === '6mo') {
     return d.toLocaleDateString('en-IN', { day:'2-digit', month:'short' });
   }
   return d.toLocaleDateString('en-IN', { month:'short', year:'2-digit' });
 }
 
-export async function fetchChartData(symbol, range = '1y') {
+async function fetchYahooChart(sym, range, interval) {
+  // /yf/* is proxied to Yahoo Finance:
+  // - Local dev: Vite proxy in vite.config.js
+  // - Production: Vercel rewrite in vercel.json
+  const url = `/yf/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`Yahoo Finance ${res.status}`);
+  return res.json();
+}
+
+function parseYahooResponse(json, range) {
+  const result = json?.chart?.result?.[0];
+  if (!result) throw new Error('No chart data');
+  const timestamps = result.timestamp ?? [];
+  const closes = result.indicators?.quote?.[0]?.close ?? [];
+  if (timestamps.length === 0) throw new Error('Empty chart data');
+  return timestamps
+    .map((t, i) => ({ date: formatChartDate(t, range), close: Number((closes[i] || 0).toFixed(2)), time: t }))
+    .filter(c => c.close > 0);
+}
+
+export async function fetchChartData(symbol, range = '1d') {
   const sym = symbol.includes('.') ? symbol : symbol.toUpperCase() + '.NS';
-  const intervalMap = { '1d':'1m', '5d':'5m', '1mo':'1d', '3mo':'1d', '6mo':'1d', '1y':'1d', '5y':'1wk' };
   const interval = intervalMap[range] || '1d';
 
-  // Try backend first for 1d (fresh intraday), fallback to Yahoo if 500
-  if (range === '1d') {
-    try {
-      const d = await getStockData(sym, '1d', '1m');
-      if (d?.chart?.length > 0) {
-        return d.chart
-          .filter(c => c.close != null && c.close > 0)
-          .map(c => ({ date: formatChartDate(c.time, '1d'), close: Number(c.close.toFixed(2)), time: c.time }));
-      }
-    } catch {
-      // Backend 500d (Yahoo rate limit) — fall through to direct Yahoo fetch below
-    }
-  }
+  // Try requested range
+  try {
+    const json = await fetchYahooChart(sym, range, interval);
+    const data = parseYahooResponse(json, range);
+    if (data.length > 0) return data;
+  } catch {}
 
-  // All ranges (or 1d fallback) — fetch directly from Yahoo Finance with proxy fallbacks
-  const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}`;
-  
-  for (const makeProxy of YF_PROXIES) {
+  // Fall back to 1d if longer range failed
+  if (range !== '1d') {
     try {
-      const res = await fetch(makeProxy(yfUrl), { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const result = json?.chart?.result?.[0];
-      if (!result) continue;
-      const timestamps = result.timestamp ?? [];
-      const closes = result.indicators?.quote?.[0]?.close ?? [];
-      if (timestamps.length === 0) continue;
-      return timestamps
-        .map((t, i) => ({ date: formatChartDate(t, range), close: Number((closes[i] || 0).toFixed(2)), time: t }))
-        .filter(c => c.close > 0);
+      const json = await fetchYahooChart(sym, '1d', '1m');
+      const data = parseYahooResponse(json, '1d');
+      if (data.length > 0) return data;
     } catch {}
   }
-  return [];
+
+  throw new Error('Chart data unavailable');
 }
 
 // ── ORDERS ────────────────────────────────────────────────────
-// GET /api/orders/get-orders?username=X&orderType=ALL|PENDING|EXECUTED
-// Returns: {success, data: {orders:[{symbol,quantity,orderType,price,status}], totalOrders, pendingOrders, executedOrders}}
+// GET /api/orders/get-orders?username=X&orderType=ALL|PENDING|EXECUTED [AUTH]
+// Returns: {success, data: {orders:[{id,symbol,quantity,orderType,price,status}], totalOrders, pendingOrders, executedOrders}}
 export async function getOrders(username, orderType = 'ALL') {
   const res = await http(`/api/orders/get-orders?username=${encodeURIComponent(username)}&orderType=${orderType}`);
   if (!res.ok) throw new ApiError(res.status, await parseErr(res));
@@ -271,9 +272,9 @@ export async function getOrders(username, orderType = 'ALL') {
       price:              o.price || 0,
       limitPrice:         o.orderType === 'LIMIT' ? (o.price||0) : null,
       executedPrice:      o.status === 'EXECUTED' ? (o.price||0) : null,
-      marketPriceAtOrder: o.price || 0,
       status:             o.status || 'PENDING',
-      createdAt:          o.createdAt || new Date().toISOString(),
+      type:               o.type || 'BUY',   // BUY or SELL — from backend TransactionType enum
+      createdAt:          o.createdAt || null,
     })),
     totalOrders:    data.totalOrders    || 0,
     pendingOrders:  data.pendingOrders  || 0,
@@ -281,9 +282,9 @@ export async function getOrders(username, orderType = 'ALL') {
   };
 }
 
-// POST /api/orders/buy
+// POST /api/orders/buy?username=X [AUTH]
+// Body: {symbol, quantity, orderType, price}
 // Response: {success, data: {symbol, quantity, orderType, price, status}}
-// status reflects market hours: EXECUTED if market open, PENDING otherwise
 export async function buyStock(username, { symbol, quantity, orderType, price }) {
   const res = await http(`/api/orders/buy?username=${encodeURIComponent(username)}`, {
     method: 'POST',
@@ -295,8 +296,7 @@ export async function buyStock(username, { symbol, quantity, orderType, price })
   return j.data; // {symbol, quantity, orderType, price, status}
 }
 
-// ── LOCAL ORDER STORE — fallback/cache ────────────────────────
-// Key: sfy_orders_{username}
+// ── LOCAL ORDER STORE — cache/fallback ────────────────────────
 const OKEY = u => `sfy_orders_${u}`;
 
 export function saveLocalOrder(username, order) {
@@ -348,4 +348,25 @@ export function getStoredUsername() {
   try { return localStorage.getItem('username'); } catch { return null; }
 }
 
-export function getApiBase() { return API || 'http://localhost:8081'; }
+// Returns '' in local dev (uses Vite proxy) or the full URL in production
+export function getApiBase() { return API || ''; }
+
+// ── SELL ORDER ────────────────────────────────────────────────
+// POST /api/orders/sell?username=X [AUTH]
+// Body: {symbol, quantity, orderType, price}
+// Errors:
+//   500 "No stocks found"        → user has no holdings for this stock
+//   402 "Less quantity available" → not enough shares to sell
+// Response: {success, data: {symbol, quantity, orderType, price, status, type:"SELL"}}
+export async function sellStock(username, { symbol, quantity, orderType, price }) {
+  const res = await http(`/api/orders/sell?username=${encodeURIComponent(username)}`, {
+    method: 'POST',
+    body: JSON.stringify({ symbol, quantity, orderType: orderType || 'MARKET', price }),
+  });
+  const j = await res.json();
+  // 402 = Less quantity available / Insufficient balance
+  if (res.status === 402) throw new ApiError(402, j?.error?.message || 'Less quantity available');
+  // 500 with "No stocks found" = not in portfolio
+  if (!res.ok || !j.success) throw new ApiError(res.status, j?.error?.message || j?.message || 'Sell order failed');
+  return j.data; // {symbol, quantity, orderType, price, status, type}
+}

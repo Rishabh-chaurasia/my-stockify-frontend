@@ -99,7 +99,7 @@ export default function Login() {
           {backendOk !== null && (
             <div className="fade-up" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 13px', borderRadius: 'var(--r)', marginBottom: 28, fontSize: 12, fontWeight: 500, background: backendOk ? 'var(--green-lt)' : 'var(--red-lt)', border: `1px solid ${backendOk ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`, color: backendOk ? 'var(--green)' : 'var(--red)' }}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', display: 'inline-block', animation: backendOk ? 'pulse 2s infinite' : 'none' }}/>
-              {backendOk ? 'Backend connected' : 'Backend unreachable — start Spring Boot server'}
+              {backendOk ? 'Server connected' : 'Server unreachable — please try again later'}
             </div>
           )}
 
@@ -137,10 +137,10 @@ export default function Login() {
               </div>
             )}
 
-            <button type="submit" disabled={loading || backendOk === false}
-              style={{ width: '100%', padding: '13px 0', marginTop: 20, border: 'none', borderRadius: 'var(--r)', fontSize: 15, fontWeight: 600, cursor: loading || backendOk === false ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, transition: 'all 0.15s', opacity: loading ? 0.7 : 1,
-                background: loading || backendOk === false ? 'var(--muted2)' : 'linear-gradient(135deg,#1d4ed8,#3b82f6)', color: '#fff',
-                boxShadow: loading || backendOk === false ? 'none' : '0 4px 16px rgba(59,130,246,0.25)',
+            <button type="submit" disabled={loading}
+              style={{ width: '100%', padding: '13px 0', marginTop: 20, border: 'none', borderRadius: 'var(--r)', fontSize: 15, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, transition: 'all 0.15s', opacity: loading ? 0.7 : 1,
+                background: loading ? 'var(--muted2)' : 'linear-gradient(135deg,#1d4ed8,#3b82f6)', color: '#fff',
+                boxShadow: loading ? 'none' : '0 4px 16px rgba(59,130,246,0.25)',
               }}>
               {loading ? <><div style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }}/> Signing in…</> : <><span>Sign in</span><ArrowRight size={16}/></>}
             </button>

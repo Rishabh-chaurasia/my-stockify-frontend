@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { TrendingUp, TrendingDown, RefreshCw, BarChart3, Plus, ArrowUpRight } from 'lucide-react';
 import Header from '../components/Header';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +10,7 @@ const FMT = v => v == null ? '—' : new Intl.NumberFormat('en-IN', { maximumFra
 
 export default function Portfolio() {
   const { username } = useAuth();
+  const navigate = useNavigate();
   const [holdings, setHoldings] = useState([]);
   const [prices,   setPrices]   = useState({});
   const [wallet,   setWallet]   = useState(null);
@@ -164,7 +165,7 @@ export default function Portfolio() {
             <div style={{ background:'#fff', borderRadius:'var(--r-lg)', border:'1px solid var(--border)', overflow:'hidden', boxShadow:'var(--shadow-xs)' }}>
               {/* Header */}
               <div style={{ display:'grid', gridTemplateColumns:'2.5fr 1fr 1fr 1fr 1fr', gap:8, padding:'10px 20px', background:'#fafafa', borderBottom:'1px solid var(--border)' }}>
-                {['STOCK','QTY','AVG COST','LTP','P&L'].map(h => (
+                {['STOCK','QTY','AVG COST','LTP','P&L',''].map(h => (
                   <p key={h} style={{ fontSize:10, color:'var(--muted)', fontWeight:700, letterSpacing:'0.5px' }}>{h}</p>
                 ))}
               </div>
@@ -173,7 +174,7 @@ export default function Portfolio() {
                 const pos = h.pl >= 0;
                 return (
                   <div key={h.id||i}
-                    style={{ display:'grid', gridTemplateColumns:'2.5fr 1fr 1fr 1fr 1fr', gap:8, padding:'14px 20px', borderBottom: i<enriched.length-1?'1px solid var(--border)':'none', alignItems:'center', transition:'background 0.1s', cursor:'default' }}
+                    style={{ display:'grid', gridTemplateColumns:'2.5fr 1fr 1fr 1fr 1fr auto', gap:8, padding:'14px 20px', borderBottom: i<enriched.length-1?'1px solid var(--border)':'none', alignItems:'center', transition:'background 0.1s', cursor:'default' }}
                     onMouseEnter={e => e.currentTarget.style.background='#fafafa'}
                     onMouseLeave={e => e.currentTarget.style.background='transparent'}>
                     <div>
@@ -200,6 +201,13 @@ export default function Portfolio() {
                         {pos?'+':''}{h.plPct.toFixed(2)}%
                       </p>
                     </div>
+                    <button
+                      onClick={() => navigate(`/trade?sell=${encodeURIComponent(h.symbol)}`)}
+                      style={{ padding:'5px 12px', borderRadius:6, border:'none', background:'var(--red-lt)', color:'var(--red)', fontSize:12, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap' }}
+                      onMouseEnter={e => { e.currentTarget.style.background='var(--red)'; e.currentTarget.style.color='#fff'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background='var(--red-lt)'; e.currentTarget.style.color='var(--red)'; }}>
+                      Sell
+                    </button>
                   </div>
                 );
               })}
