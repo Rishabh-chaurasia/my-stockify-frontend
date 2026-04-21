@@ -4,14 +4,16 @@ import { Search, LayoutDashboard, ArrowLeftRight, ClipboardList, User, LogOut, C
 import { useAuth } from '../context/AuthContext';
 
 const NAV_PUBLIC = [
-  { to:'/explore', label:'Explore' },
-  { to:'/stocks',  label:'Search'  },
+  { to:'/explore',  label:'Explore'  },
+  { to:'/stocks',   label:'Search'   },
+  { to:'/analysis', label:'Analysis' },
 ];
 const NAV_AUTH = [
   { to:'/portfolio', label:'Dashboard' },
   { to:'/trade',     label:'Stocks'    },
   { to:'/orders',    label:'Orders'    },
   { to:'/stocks',    label:'Search'    },
+  { to:'/analysis',  label:'Analysis'  },
   { to:'/profile',   label:'Profile'   },
 ];
 const BOT_AUTH = [
@@ -45,9 +47,10 @@ export default function Header() {
             <img
               src="/logo.png"
               alt="Stockify"
-              style={{ width:38,height:38,objectFit:'contain',borderRadius:8 }}
+              style={{ width:38,height:38,objectFit:'contain',borderRadius:8,transition:'transform 0.2s ease' }}
+              onMouseEnter={e => e.currentTarget.style.transform='scale(0.88)'}
+              onMouseLeave={e => e.currentTarget.style.transform='scale(1)'}
               onError={e => {
-                // Fallback to gradient icon if logo fails to load
                 e.target.style.display = 'none';
                 e.target.nextSibling.style.display = 'flex';
               }}

@@ -370,3 +370,26 @@ export async function sellStock(username, { symbol, quantity, orderType, price }
   if (!res.ok || !j.success) throw new ApiError(res.status, j?.error?.message || j?.message || 'Sell order failed');
   return j.data; // {symbol, quantity, orderType, price, status, type}
 }
+
+// ── INDICES ───────────────────────────────────────────────────
+// GET /api/stocks/index/{symbol}?range=1d&interval=1h [PUBLIC]
+// symbols: nifty50, bank-nifty, finnifty, nifty-it,
+//          nifty-midcap-50, nifty-smallcap, sensex-bse, india-vix
+// Returns: {success, data: {meta, chart}}
+export async function getIndex(symbol, range = '1d', interval = '1h') {
+  const res = await fetch(`${API}/api/stocks/index/${symbol}?range=${range}&interval=${interval}`);
+  if (!res.ok) throw new ApiError(res.status, 'Index data unavailable');
+  const j = await res.json();
+  if (!j.success) throw new ApiError(500, j.message || 'Index data unavailable');
+  return j.data; // { meta, chart }
+}
+
+// ── DELETE ORDER ──────────────────────────────────────────────
+// DELETE /api/orders/delete-orders?username=X&id=Y [AUTH]
+export async function deleteOrder(username, id) {
+  const res = await http(`/api/orders/delete-orders?username=${encodeURIComponent(username)}&id=${id}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new ApiError(res.status, 'Failed to delete order');
+  return true;
+}

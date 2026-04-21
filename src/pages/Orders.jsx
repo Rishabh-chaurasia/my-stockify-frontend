@@ -2,11 +2,11 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   ClipboardList, Clock, CheckCircle, XCircle, RefreshCw,
   ChevronDown, ChevronUp, Info, AlertCircle, Package,
-  TrendingUp, TrendingDown
+  TrendingUp, TrendingDown, Trash2
 } from 'lucide-react';
 import Header from '../components/Header';
 import { useAuth } from '../context/AuthContext';
-import { getOrders, getStockData, getMarketStatus } from '../lib/api';
+import { getOrders, getStockData, getMarketStatus, deleteOrder } from '../lib/api';
 
 const FMT = v => v==null?'—':new Intl.NumberFormat('en-IN',{maximumFractionDigits:2}).format(v);
 const INR = v => new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(v??0);
@@ -41,6 +41,7 @@ export default function Orders() {
   const [error,    setError]    = useState('');
   const [tab,      setTab]      = useState('ALL');
   const [expanded, setExpanded] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const market = getMarketStatus();
 
   const load = useCallback(async (quiet = false) => {
@@ -68,6 +69,18 @@ export default function Orders() {
     const iv = setInterval(() => load(true), 30000);
     return () => clearInterval(iv);
   }, [load]);
+
+  const handleDelete = async (orderId) => {
+    if (!window.confirm('Delete this order?')) return;
+    setDeleting(orderId);
+    try {
+      await deleteOrder(username, orderId);
+      await load(true);
+    } catch (e) {
+      alert(e.message || 'Failed to delete order');
+    }
+    setDeleting(null);
+  };
 
   const shown = tab==='ALL' ? data.orders : data.orders.filter(o => o.status === tab);
 
@@ -293,7 +306,17 @@ export default function Orders() {
                         ))}
                       </div>
 
-                      {/* Executed confirmation */}
+                      {/* Delete button */}
+                    <div style={{ marginTop:12, display:'flex', justifyContent:'flex-end' }}>
+                      <button onClick={() => handleDelete(o.id)}
+                        disabled={deleting === o.id}
+                        style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 14px', border:'1px solid rgba(235,87,87,0.3)', borderRadius:'var(--r-sm)', background:'var(--red-lt)', color:'var(--red)', fontSize:12, fontWeight:600, cursor:'pointer', opacity: deleting===o.id ? 0.6 : 1 }}>
+                        <Trash2 size={12}/>
+                        {deleting===o.id ? 'Deleting…' : 'Delete Order'}
+                      </button>
+                    </div>
+
+                    {/* Executed confirmation */}
                       {o.status === 'EXECUTED' && (
                         <div style={{ marginTop:12, padding:'10px 14px', borderRadius:'var(--r)', background:isSell?'var(--red-lt)':'var(--green-lt)', border:`1px solid ${isSell?'rgba(235,87,87,0.2)':'rgba(0,183,134,0.2)'}`, display:'flex', alignItems:'center', gap:8 }}>
                           <CheckCircle size={15} color={isSell?'var(--red)':'var(--green-d)'}/>
